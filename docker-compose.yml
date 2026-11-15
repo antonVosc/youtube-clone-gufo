@@ -69,6 +69,14 @@ services:
       timeout: 5s
       retries: 30
 
+  worker:
+    <<: *restart
+    build: ./backend
+    env_file: .env
+    command: celery -A app.worker.celery_app worker -B -l info -c 2
+    depends_on:
+      api: { condition: service_healthy }
+
   nginx:
     <<: *restart
     image: nginx:1.27-alpine
