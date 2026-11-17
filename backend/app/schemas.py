@@ -1,8 +1,10 @@
 import uuid
+from datetime import datetime
+from xml.dom.minicompat import NodeList
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import Role
+from app.models import Role, VideoStatus, Visibility
 
 
 class RegisterIn(BaseModel):
@@ -33,16 +35,53 @@ class RoleIn(BaseModel):
     role: Role
 
 
-class ChannelOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID
-    handle: str
-    name: str
-    description: str
-    subscribers: int = 0
-    subscribed: bool = False
+class VideoCreateIn(BaseModel):
+    title: str = Field(min_length=1, max_length=150)
+    description: str = Field(default="", max_length=5000)
+    visibility: Visibility = Visibility.public
+    filename: str = Field(max_length=255)
+    content_type: str = Field(max_length=100)
+    size_bytes: int = Field(gt=0)
 
 
-class ChannelPatch(BaseModel):
-    name: str | None = Field(default=None, max_length=100)
+class VideoCreateOut(BaseModel):
+    video_id: uuid.UUID
+    upload_id: str
+    part_size: int
+    part_urls: list[str]
+
+
+class UploadPart(BaseModel):
+    part_number: int = Field(ge=1, le=10000)
+    etag: str
+
+
+class UploadCompleteIn(BaseModel):
+    parts: list[UploadPart] = Field(min_length=1)
+
+
+class VideoPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=150)
     description: str | None = Field(default=None, max_length=5000)
+    visibility: Visibility | None = None
+
+
+class VideoOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    description: str
+    status: VideoStatus
+    visibility: Visibility
+    is_hidden: bool = False
+    duration_sec: int | None = None
+    views_count: int = 0
+    created_at: datetime
+    thumb_url: str | None = None
+    hls_url: str | None = None
+    likes: int = 0
+    dislikes: int = 0
+    my_like: int = 0
+
+
+class ShareIn(BaseModel):
+    username: str

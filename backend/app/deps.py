@@ -1,9 +1,11 @@
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db import get_session
-from app.models import Role, User
+from app.models import Role, User, Video, VideoShare, VideoStatus, Visibility
 from app.security import decode_access_token
 
 bearer = HTTPBearer(auto_error=False)
@@ -45,6 +47,40 @@ def require_role(*roles: Role):
         return user
 
     return dep
+
+
+async def can_view_video(session, video, user: User | None):
+    is_owner = bool(user and video.channel.owner_id == user.id)
+    is_staff = bool(user and user.role in STAFF)
+
+    if is_owner or is_staff:
+        return True
+
+    if video.is_hidden or video.status != VideoStatus.ready:
+        return False
+
+    if video.visibility in (Visibility.public, Visibility.unlisted):
+        return True
+
+    if user is None:
+        return False
+
+    shared = await session.execute(
+        select(VideoShare).where(
+            VideoShare.video_id == video.id, VideoShare.user_id == user.id
+        )
+    )
+
+    return shared.scalar_one_or_none() is not None
+
+
+async def get_video_or_404(session, video_id):
+    v = await session.get(Video, video_id, options=[selectinload(Video.channel)])
+
+    if not v:
+        raise HTTPException(404, "Video not found")
+
+    return v
 
 
 def client_ip(request):

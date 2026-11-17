@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 
-from app.routers import auth
+from app.routers import auth, media, videos
 
-app = FastAPI(title="Youtube Clone API", version="1.0.0", docs_url="/docs")
+app = FastAPI(title="TubeClone API", version="1.0.0", docs_url="/docs")
 
-app.include_router(auth.router)
+for r in (auth.router, videos.router, media.router):
+    app.include_router(r)
 
 
 @app.get("api/health", tags=["system"])
