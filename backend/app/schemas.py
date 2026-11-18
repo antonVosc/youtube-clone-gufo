@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from xml.dom.minicompat import NodeList
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +35,21 @@ class RoleIn(BaseModel):
     role: Role
 
 
+class ChannelOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    handle: str
+    name: str
+    description: str
+    subscribers: int = 0
+    subscribed: bool = False
+
+
+class ChannelPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=5000)
+
+
 class VideoCreateIn(BaseModel):
     title: str = Field(min_length=1, max_length=150)
     description: str = Field(default="", max_length=5000)
@@ -66,8 +81,14 @@ class VideoPatch(BaseModel):
     visibility: Visibility | None = None
 
 
+class ChannelBrief(BaseModel):
+    handle: str
+    name: str
+
+
 class VideoOut(BaseModel):
     id: uuid.UUID
+    channel: ChannelBrief
     title: str
     description: str
     status: VideoStatus
@@ -85,3 +106,76 @@ class VideoOut(BaseModel):
 
 class ShareIn(BaseModel):
     username: str
+
+
+class LikeIn(BaseModel):
+    value: int = Field(ge=-1, le=1)  # 1 лайк, -1 дизлайк, 0 снять оценку
+
+
+class LikeOut(BaseModel):
+    likes: int
+    dislikes: int
+    my_like: int
+
+
+class CommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    parent_id: uuid.UUID | None = None
+
+
+class CommentOut(BaseModel):
+    id: uuid.UUID
+    video_id: uuid.UUID
+    username: str
+    parent_id: uuid.UUID | None
+    text: str
+    created_at: datetime
+
+
+class ReportIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class ReportOut(BaseModel):
+    id: uuid.UUID
+    video_id: uuid.UUID
+    video_title: str
+    video_is_hidden: bool
+    channel_handle: str
+    reporter: str
+    reason: str
+    status: str
+    created_at: datetime
+
+
+class HideIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ResolveIn(BaseModel):
+    action: Literal["hide", "dismiss"]
+
+
+class PlaylistIn(BaseModel):
+    title: str = Field(min_length=1, max_length=150)
+    visibility: Visibility = Visibility.public
+
+
+class PlaylistItemIn(BaseModel):
+    video_id: uuid.UUID
+
+
+class PlaylistOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    visibility: Visibility
+    channel_handle: str
+    videos: list[VideoOut] = []
+
+
+class AdminUserOut(UserOut):
+    is_active: bool
+
+
+class ActiveIn(BaseModel):
+    active: bool

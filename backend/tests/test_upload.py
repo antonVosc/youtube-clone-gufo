@@ -164,7 +164,8 @@ def test_process_is_idempotent_for_ready_video(new_client, fake):
 
 
 def test_owner_edits_and_deletes(new_client, fake):
-    a, b = register(new_client, "alice"), register(new_client, "bob")
+    a = register(new_client, "alice")
+    b = register(new_client, "bob")
     vid = make_video(a, fake, "Old")
 
     assert (
