@@ -1113,6 +1113,514 @@ async function pagePlaylist(id) {
   );
 }
 
+async function pageUpload() {
+  if (!me) return mount(app(), needLogin());
+  const file = h("input", {
+    type: "file",
+    accept:
+      "video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv",
+  });
+
+  const title = h("input", { type: "text", maxLength: 150, required: true });
+  const desc = h("textarea", { rows: 4, maxLength: 5000 });
+  const vis = h(
+    "select",
+    {},
+    h("option", { value: "public" }, "Открытый доступ"),
+    h("option", { value: "unlisted" }, "Доступ по ссылке"),
+    h("option", { value: "private" }, "Ограниченный доступ (приватное)"),
+  );
+
+  const bar = h("i");
+  const barWrap = h("div", { class: "bar" }, bar);
+  const status = h("div", { class: "sub" });
+  const err = h("div", { class: "err" });
+
+  const btn = h(
+    "button",
+    { class: "btn primary", type: "submit" },
+    "Загрузить",
+  );
+
+  file.addEventListener("change", () => {
+    if (file.files[0] && !title.value) {
+      title.value = file.files[0].name.replace(/\.[^.]+$/, "");
+    }
+  });
+
+  const putPart = (url, blob, onProgress) =>
+    new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+
+      x.open("PUT", url);
+      x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
+      x.onload = () =>
+        x.status >= 200 && x.status < 300
+          ? resolve(x.getResponseHeader("ETag") || "")
+          : reject(new Error("Ошибка загрузки части: " + x.status));
+      x.onerror = () => reject(new Error("Сетевая ошибка при загрузке"));
+      x.send(blob);
+    });
+
+  const form = h(
+    "form",
+    {
+      class: "form wide",
+      onsubmit: async (e) => {
+        e.preventDefault();
+        err.textContent = "";
+        const f = file.files[0];
+
+        if (!f) {
+          err.textContent = "Выберите файл";
+          return;
+        }
+
+        btn.disabled = true;
+
+        try {
+          status.textContent = "Подготовка…";
+          const init = await api("/videos", {
+            method: "POST",
+            body: {
+              title: title.value,
+              description: desc.value,
+              visibility: vis.value,
+              filename: f.name,
+              content_type: f.type || "video/mp4",
+              size_bytes: f.size,
+            },
+          });
+
+          let done = 0;
+          const parts = [];
+
+          for (let i = 0; i < init.part_urls.length; i++) {
+            const blob = f.slice(i * init.part_size, (i + 1) * init.part_size);
+            const etag = await putPart(init.part_urls[i], blob, (loaded) => {
+              const pct = Math.round(((done + loaded) / f.size) * 100);
+              bar.style.width = pct + "%";
+              status.textContent = `Загрузка: ${pct}%`;
+            });
+
+            done += blob.size;
+            parts.push({ part_number: i + 1, etag });
+          }
+
+          bar.style.width = "100%";
+          status.textContent = "Проверка файла…";
+
+          await api(`/videos/${init.video_id}/upload/complete`, {
+            method: "POST",
+            body: { parts },
+          });
+
+          toast("Видео загружено и отправлено на обработку");
+          go("#/watch/" + init.video_id);
+        } catch (ex) {
+          err.textContent = ex.message;
+          status.textContent = "";
+          btn.disabled = false;
+        }
+      },
+    },
+    h("h1", {}, "Загрузка видео"),
+    h("div", { class: "drop" }, file),
+    h("label", {}, "Название", title),
+    h("label", {}, "Описание", desc),
+    h("label", {}, "Доступ", vis),
+    barWrap,
+    status,
+    err,
+    btn,
+  );
+
+  mount(app(), form);
+}
+
+async function pageStudio() {
+  if (!me) {
+    return mount(app(), needLogin());
+  }
+
+  mount(app(), loading());
+
+  const vs = await api("/me/videos");
+  const rows = vs.map((v) => {
+    const sel = h(
+      "select",
+      {
+        onchange: async () => {
+          try {
+            await api("/videos/" + v.id, {
+              method: "PATCH",
+              body: { visibility: sel.value },
+            });
+            toast("Сохранено");
+            pageStudio();
+          } catch (e) {
+            toast(e.message);
+          }
+        },
+      },
+      ["public", "unlisted", "private"].map((o) =>
+        h(
+          "option",
+          { value: o, selected: o === v.visibility },
+          { public: "Открытое", unlisted: "По ссылке", private: "Приватное" }[
+            o
+          ],
+        ),
+      ),
+    );
+
+    const share = h("input", { type: "text", placeholder: "логин друга" });
+    const shared = h("div", { class: "sub" });
+    const loadShared = () =>
+      api(`/videos/${v.id}/shares`)
+        .then((u) => {
+          shared.textContent = u.length ? "Доступ: " + u.join(", ") : "";
+        })
+        .catch(() => {});
+
+    if (v.visibility === "private") {
+      loadShared();
+    }
+
+    return h(
+      "tr",
+      {},
+      h(
+        "td",
+        {},
+        h("a", { href: "#/watch/" + v.id, class: "title" }, v.title),
+        statusBadges(v),
+        h("div", { class: "sub" }, metaLine(v)),
+      ),
+      h("td", {}, sel),
+      h(
+        "td",
+        {},
+        v.visibility === "private" &&
+          h(
+            "div",
+            {},
+            h(
+              "div",
+              { class: "inline" },
+              share,
+              h(
+                "button",
+                {
+                  class: "btn small",
+                  onclick: async () => {
+                    try {
+                      await api(`/videos/${v.id}/shares`, {
+                        method: "POST",
+                        body: { username: share.value.trim() },
+                      });
+
+                      share.value = "";
+                      loadShared();
+                    } catch (e) {
+                      toast(e.message);
+                    }
+                  },
+                },
+                "Дать доступ",
+              ),
+            ),
+            shared,
+          ),
+      ),
+      h(
+        "td",
+        {},
+        h(
+          "button",
+          {
+            class: "btn small",
+            onclick: async () => {
+              if (confirm("Удалить видео безвозвратно?")) {
+                try {
+                  await api("/videos/" + v.id, { method: "DELETE" });
+                  pageStudio();
+                } catch (e) {
+                  toast(e.message);
+                }
+              }
+            },
+          },
+          "Удалить",
+        ),
+      ),
+    );
+  });
+
+  mount(
+    app(),
+    h("h2", { class: "section" }, "Студия"),
+    h("a", { class: "btn primary", href: "#/upload" }, "＋ Загрузить видео"),
+    h("br"),
+    h("br"),
+    vs.length
+      ? h(
+          "table",
+          {},
+          h(
+            "thead",
+            {},
+            h(
+              "tr",
+              {},
+              ["Видео", "Доступ", "Приватный доступ", ""].map((t) =>
+                h("th", {}, t),
+              ),
+            ),
+          ),
+          h("tbody", {}, rows),
+        )
+      : h("div", { class: "empty" }, "Вы ещё ничего не загрузили"),
+  );
+}
+
+async function pageModeration() {
+  if (!isStaff()) {
+    return mount(
+      app(),
+      h("div", { class: "empty" }, "Раздел доступен модераторам"),
+    );
+  }
+
+  mount(app(), loading());
+
+  const [reports, hidden] = await Promise.all([
+    api("/moderation/reports"),
+    api("/moderation/hidden"),
+  ]);
+  const act = (fn) => async () => {
+    try {
+      await fn();
+      pageModeration();
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+
+  mount(
+    app(),
+    h("h2", { class: "section" }, "Открытые жалобы"),
+    reports.length
+      ? h(
+          "table",
+          {},
+          h(
+            "thead",
+            {},
+            h(
+              "tr",
+              {},
+              ["Видео", "Жалоба", "От", "Действия"].map((t) => h("th", {}, t)),
+            ),
+          ),
+          h(
+            "tbody",
+            {},
+            reports.map((r) =>
+              h(
+                "tr",
+                {},
+                h(
+                  "td",
+                  {},
+                  h(
+                    "a",
+                    { href: "#/watch/" + r.video_id, class: "title" },
+                    r.video_title,
+                  ),
+                  h("div", { class: "sub" }, "@" + r.channel_handle),
+                  r.video_is_hidden &&
+                    h("span", { class: "badge bad" }, "скрыто"),
+                ),
+                h("td", {}, r.reason),
+                h("td", {}, r.reporter),
+                h(
+                  "td",
+                  {},
+                  h(
+                    "div",
+                    { class: "inline" },
+                    h(
+                      "button",
+                      {
+                        class: "btn small red",
+                        onclick: act(() =>
+                          api(`/moderation/reports/${r.id}/resolve`, {
+                            method: "POST",
+                            body: { action: "hide" },
+                          }),
+                        ),
+                      },
+                      "Скрыть видео",
+                    ),
+                    h(
+                      "button",
+                      {
+                        class: "btn small",
+                        onclick: act(() =>
+                          api(`/moderation/reports/${r.id}/resolve`, {
+                            method: "POST",
+                            body: { action: "dismiss" },
+                          }),
+                        ),
+                      },
+                      "Отклонить",
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        )
+      : h("div", { class: "empty" }, "Открытых жалоб нет"),
+    h("br"),
+    h("h2", { class: "section" }, "Скрытые видео"),
+    hidden.length
+      ? h(
+          "table",
+          {},
+          h(
+            "tbody",
+            {},
+            hidden.map((v) =>
+              h(
+                "tr",
+                {},
+                h(
+                  "td",
+                  {},
+                  h("a", { href: "#/watch/" + v.id, class: "title" }, v.title),
+                  h("div", { class: "sub" }, "@" + v.channel.handle),
+                ),
+                h(
+                  "td",
+                  {},
+                  h(
+                    "button",
+                    {
+                      class: "btn small",
+                      onclick: act(() =>
+                        api(`/moderation/videos/${v.id}/unhide`, {
+                          method: "POST",
+                        }),
+                      ),
+                    },
+                    "Вернуть",
+                  ),
+                ),
+              ),
+            ),
+          ),
+        )
+      : h("div", { class: "empty" }, "Скрытых видео нет"),
+  );
+}
+
+async function pageAdmin() {
+  if (!me || me.role !== "admin") {
+    return mount(
+      app(),
+      h("div", { class: "empty" }, "Раздел доступен администраторам"),
+    );
+  }
+
+  mount(app(), loading());
+
+  const users = await api("/admin/users");
+  mount(
+    app(),
+    h("h2", { class: "section" }, "Пользователи"),
+    h(
+      "table",
+      {},
+      h(
+        "thead",
+        {},
+        h(
+          "tr",
+          {},
+          ["Пользователь", "Email", "Роль", "Статус"].map((t) =>
+            h("th", {}, t),
+          ),
+        ),
+      ),
+      h(
+        "tbody",
+        {},
+        users.map((u) => {
+          const self = u.id === me.id;
+          const sel = h(
+            "select",
+            {
+              disabled: self,
+              onchange: async () => {
+                try {
+                  await api(`/admin/users/${u.id}/role`, {
+                    method: "PUT",
+                    body: { role: sel.value },
+                  });
+                  toast("Роль изменена");
+                } catch (e) {
+                  toast(e.message);
+                  pageAdmin();
+                }
+              },
+            },
+            ["user", "moderator", "admin"].map((r) =>
+              h("option", { value: r, selected: r === u.role }, r),
+            ),
+          );
+
+          return h(
+            "tr",
+            {},
+            h(
+              "td",
+              {},
+              h("a", { href: "#/channel/" + u.username }, "@" + u.username),
+            ),
+            h("td", {}, u.email),
+            h("td", {}, sel),
+            h(
+              "td",
+              {},
+              h(
+                "button",
+                {
+                  class: "btn small",
+                  disabled: self,
+                  onclick: async () => {
+                    try {
+                      await api(`/admin/users/${u.id}/active`, {
+                        method: "PUT",
+                        body: { active: !u.is_active },
+                      });
+                      pageAdmin();
+                    } catch (e) {
+                      toast(e.message);
+                    }
+                  },
+                },
+                u.is_active ? "Заблокировать" : "Разблокировать",
+              ),
+            ),
+          );
+        }),
+      ),
+    ),
+  );
+}
+
 const routes = [
   [/^\/?$/, pageHome],
   [/^\/subs$/, pageSubs],
@@ -1120,6 +1628,10 @@ const routes = [
   [/^\/watch\/([\w-]+)$/, pageWatch],
   [/^\/channel\/(\w+)(?:\/(\w+))?$/, pageChannel],
   [/^\/playlist\/([\w-]+)$/, pagePlaylist],
+  [/^\/upload$/, pageUpload],
+  [/^\/studio$/, pageStudio],
+  [/^\/moderation$/, pageModeration],
+  [/^\/admin$/, pageAdmin],
   [/^\/login$/, () => mount(app(), authForm("login"))],
   [/^\/register$/, () => mount(app(), authForm("register"))],
 ];
