@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Деплой на чистой Ubuntu ОДНОЙ командой:   sudo ./deploy.sh
+# Ставит Docker (если нет), генерирует секреты, поднимает стек, мигрирует БД, наполняет демо-данными
+# и прогоняет сквозную проверку «регистрация -> загрузка -> просмотр -> лайк и комментарий».
+
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -34,3 +38,18 @@ for _ in $(seq 1 90); do
 done
 
 curl -fs http://localhost/api/health >/dev/null 2>&1 || { echo "API не поднялся:"; docker compose logs --tail=60 api; exit 1; }
+
+echo ">> Наполняю демо-данными (генерация и транскодинг 9 видео, ~1-2 минуты)..."
+docker compose exec -T api python -m app.seed
+
+echo ">> Сквозная проверка основного сценария..."
+docker compose exec -T api python scripts/smoke.py
+
+cat <<MSG
+
+Готово.
+  Приложение:  http://localhost
+  Swagger:     http://localhost/docs
+  Демо-логины (пароль demo12345): admin@demo.local, moderator@demo.local, alice@demo.local, bob@demo.local, carol@demo.local
+  Тесты:       docker compose exec api pytest -q
+MSG
