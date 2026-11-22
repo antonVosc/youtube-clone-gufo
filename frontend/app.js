@@ -1380,7 +1380,7 @@ async function pageStudio() {
           ),
           h("tbody", {}, rows),
         )
-      : h("div", { class: "empty" }, "Вы ещё ничего не загрузили"),
+      : h("div", { class: "empty" }, "Вы еще ничего не загрузили"),
   );
 }
 

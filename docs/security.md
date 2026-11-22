@@ -1,0 +1,26 @@
+# Безопасность
+
+| Угроза                                      | Мера                                                                                                                                           | Где / чем проверено                                                                         |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Утечка приватных видео                      | `can_view_video` на всех путях; приватный бакет; медиа только через `auth_request` + подпись 60 с; 404 вместо 403                              | `tests/test_access.py`, `scripts/smoke.py`                                                  |
+| Доступ к оригиналу и произвольным ключам S3 | Nginx пропускает только `/media/<uuid>/thumb.jpg` и `/media/<uuid>/hls/…`; API повторно валидирует путь regex'ом (без `..`, `//`)              | `test_media_auth_rejects_bad_tokens_and_paths`                                              |
+| Подбор пароля                               | argon2id; лимит 10 попыток / 5 мин на (IP, email); одинаковый ответ и выровненное время для неизвестного email                                 | `test_login_bruteforce_is_throttled`, `test_wrong_password_and_unknown_user_look_identical` |
+| Кража сессии                                | access JWT 15 мин (в памяти JS), refresh — httpOnly + SameSite=Lax, ротация, хранится только хэш; logout и блокировка отзывают доступ          | `test_refresh_rotates…`, `test_logout_revokes…`, `test_deactivated_user_loses_access`       |
+| Эскалация привилегий                        | роль не принимается при регистрации; роль читается из БД на каждый запрос; админ не меняет свою роль                                           | `test_register_cannot_choose_role`, `tests/test_rbac.py`                                    |
+| XSS                                         | CSP `script-src 'self'` (inline запрещен), фронт без `innerHTML`, HTML в комментариях выводится текстом                                        | `tests/test_frontend_static.py`, UI-smoke                                                   |
+| CSRF                                        | API принимает токен только из заголовка `Authorization`; cookie используются лишь для `refresh` (SameSite=Lax, POST) и `media` (только чтение) | дизайн                                                                                      |
+| Загрузка вредоносных файлов                 | whitelist типов, лимит размера (по заявке и по факту), проверка magic bytes, обработка только ffmpeg в воркере; не-видео удаляется             | `test_non_video_bytes_rejected_and_removed`                                                 |
+| Перебор идентификаторов                     | UUID v4 в URL                                                                                                                                  | —                                                                                           |
+| Спам комментариями/просмотрами              | лимиты 20 комм./мин на пользователя, 3 просмотра/мин на (IP, видео)                                                                            | `ratelimit.py`                                                                              |
+| Внутренние сервисы                          | наружу только порт 80; Postgres/Redis/MinIO в изолированной сети compose                                                                       | `docker-compose.yml`                                                                        |
+| Секреты                                     | генерируются `deploy.sh` (`openssl rand`), `.env` с правами 600 и вне git; в репозитории только `.env.example`                                 | `deploy.sh`, `.gitignore`                                                                   |
+| Заголовки                                   | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, CSP; `server_tokens off`                           | `nginx/`                                                                                    |
+| SQL-инъекции                                | только ORM / параметризованные запросы; `LIKE`-спецсимволы поиска экранируются                                                                 | `test_search_and_feed`                                                                      |
+
+## Что не сделано / риски
+
+- TLS. Стенд отдается по HTTP (порт 80). Для продакшена: терминировать TLS (Caddy/Certbot/LB), выставить `COOKIE_SECURE=true`.
+- Rate limit в памяти процесса (см. docs/architecture.md); за внешним прокси нужно доверять только его `X-Forwarded-For`.
+- Нет подтверждения email, сброса пароля, 2FA, антивирусного сканирования файлов.
+- Демо-пользователи из seed имеют известный пароль `demo12345` — в реальной эксплуатации seed не запускать.
+- `/docs` (Swagger UI) подгружает скрипты с CDN, поэтому для него CSP ослаблен; в продакшене отключить `/docs` или отдавать статику локально.
